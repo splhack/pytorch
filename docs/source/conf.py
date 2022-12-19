@@ -59,7 +59,9 @@ extensions = [
     'sphinx.ext.autosectionlabel',
     'sphinx_copybutton',
     'sphinx_panels',
-    'myst_parser',
+    # 'myst_parser',
+    'IPython.sphinxext.ipython_console_highlighting',
+    'myst_nb',
 ]
 
 # build the templated autosummary files
