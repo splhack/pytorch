@@ -254,10 +254,50 @@ if HAS_SYMPY:
 
         @classmethod
         def eval(cls, base, divisor):
+            # NOTE [ Checking types with SymPy ]
+            # Python has a dedicated complex type, but SymPy represents complex
+            # with Add exprs.
+            #
+            # isinstance doesn't work for arbitrary exprs and for Symbols, even
+            # when the latter have integer=True set during construction. So you
+            # are supposed to use the is_* properties, but it's also not always
+            # reliable as 0 has both is_integer and is_real set to True no
+            # matter whether it's constructed as a Float or an Integer.
+            #
+            # Also, booleans cannot be used in arithmetic exprs in SymPy and
+            # cannot be passed to the Integer and Float constructors.
+            # https://github.com/pytorch/pytorch/issues/90900
+            def check_supported_type(x):
+                # Note: we disallow complex as in regular Python, but we have to
+                # check for is_integer and is_real explicitly because Integer
+                # and Float have is_complex set to True. We also don't allow
+                # booleans because they cannot be used in arithmetic exprs in
+                # SymPy.
+                if (not x.is_integer and not x.is_real and x.is_complex
+                        or x.is_Boolean):
+                    raise TypeError(
+                        f"unsupported operand type(s) for //: "
+                        f"'{type(base).__name__}' and '{type(divisor).__name__}'"
+                        f", expected integer or real")
+
+            check_supported_type(base)
+            check_supported_type(divisor)
+
+            # We don't provide the same error message as in Python because SymPy
+            # makes it difficult to check the types:
+            # See NOTE [ Checking types with SymPy ]
+            if divisor.is_zero:
+                raise ZeroDivisionError("division by zero")
+
+            # We don't cast the return type as in Python because SymPy makes it
+            # difficult to check the types:
+            # See NOTE [ Checking types with SymPy ]
             if base == 0:
                 return sympy.Integer(0)
             if divisor == 1:
-                return base
+                return sympy.floor(base)
+            if base == divisor:
+                return sympy.Integer(1)
             if isinstance(base, sympy.Integer) and isinstance(divisor, sympy.Integer):
                 return base // divisor
             if isinstance(base, FloorDiv):
@@ -268,6 +308,7 @@ if HAS_SYMPY:
                 return FloorDiv(
                     sympy.simplify(base / gcd), sympy.simplify(divisor / gcd)
                 )
+
 
 # Methods that have a `__foo__` as well as `__rfoo__`
 reflectable_magic_methods = {
@@ -978,8 +1019,8 @@ class ShapeEnv(object):
         """
         Given an expression, evaluates it, adding guards if necessary
         """
-        if len(expr.free_symbols) == 0:
-            return expr
+        # Note: do not short-circuit here without evaluating as we might need to
+        # compute FloorDiv exprs in some cases.
         expr = self.simplify(expr)
         static_expr = self._maybe_evaluate_static(expr)
         if static_expr is not None:
