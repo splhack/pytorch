@@ -123,10 +123,13 @@ class RNNBase(Module):
                 self._flat_weights_names.extend(param_names)
                 self._all_weights.append(param_names)
 
-        self._flat_weights = [(lambda wn: getattr(self, wn) if hasattr(self, wn) else None)(wn) for wn in self._flat_weights_names]
-        self.flatten_parameters()
+        self._init_flat_weights()
 
         self.reset_parameters()
+
+    def _init_flat_weights(self):
+        self._flat_weights = [getattr(self, wn, None) for wn in self._flat_weights_names]
+        self.flatten_parameters()
 
     def __setattr__(self, attr, value):
         if hasattr(self, "_flat_weights_names") and attr in self._flat_weights_names:
@@ -189,9 +192,7 @@ class RNNBase(Module):
         # Resets _flat_weights
         # Note: be v. careful before removing this, as 3rd party device types
         # likely rely on this behavior to properly .to() modules like LSTM.
-        self._flat_weights = [(lambda wn: getattr(self, wn) if hasattr(self, wn) else None)(wn) for wn in self._flat_weights_names]
-        # Flattens params (on CUDA)
-        self.flatten_parameters()
+        self._init_flat_weights()
 
         return ret
 
@@ -229,6 +230,17 @@ class RNNBase(Module):
                           msg: str = 'Expected hidden size {}, got {}') -> None:
         if hx.size() != expected_hidden_size:
             raise RuntimeError(msg.format(expected_hidden_size, list(hx.size())))
+
+    def _weights_have_changed(self):
+        # Returns True if the weight tensors have changed since the last forward pass.
+        # This is the case when used with stateless.functional_call(), for example.
+        weights_changed = False
+        for flat_weight, name in zip(self._flat_weights, self._flat_weights_names):
+            weight = getattr(self, name, None)
+            if weight is not flat_weight:
+                weights_changed = True
+                break
+        return weights_changed
 
     def check_forward_args(self, input: Tensor, hidden: Tensor, batch_sizes: Optional[Tensor]):
         self.check_input(input, batch_sizes)
@@ -294,7 +306,7 @@ class RNNBase(Module):
                     else:
                         self._all_weights += [weights[:2]]
                         self._flat_weights_names.extend(weights[:2])
-        self._flat_weights = [(lambda wn: getattr(self, wn) if hasattr(self, wn) else None)(wn) for wn in self._flat_weights_names]
+        self._flat_weights = [getattr(self, wn, None) for wn in self._flat_weights_names]
 
     @property
     def all_weights(self) -> List[List[Parameter]]:
@@ -435,6 +447,10 @@ class RNN(RNNBase):
         pass
 
     def forward(self, input, hx=None):  # noqa: F811
+        if not torch.jit.is_scripting():
+            if self._weights_have_changed():
+                self._init_flat_weights()
+
         orig_input = input
         if isinstance(orig_input, PackedSequence):
             input, batch_sizes, sorted_indices, unsorted_indices = input
@@ -725,6 +741,10 @@ class LSTM(RNNBase):
         pass
 
     def forward(self, input, hx=None):  # noqa: F811
+        if not torch.jit.is_scripting():
+            if self._weights_have_changed():
+                self._init_flat_weights()
+
         orig_input = input
         # xxx: isinstance check needs to be in conditional for TorchScript to compile
         batch_sizes = None
@@ -917,6 +937,10 @@ class GRU(RNNBase):
         pass
 
     def forward(self, input, hx=None):  # noqa: F811
+        if not torch.jit.is_scripting():
+            if self._weights_have_changed():
+                self._init_flat_weights()
+
         orig_input = input
         # xxx: isinstance check needs to be in conditional for TorchScript to compile
         if isinstance(orig_input, PackedSequence):
