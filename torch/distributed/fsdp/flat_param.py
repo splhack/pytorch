@@ -1478,8 +1478,15 @@ class FlatParamHandle:
             ):
                 param.grad = None
             return
-        self._check_unsharded(self.flat_param.grad)
-        views = self._get_unflat_views(self.flat_param, self.flat_param.grad)
+        # For `NO_SHARD` with CPU offloading, the unsharded gradient's source
+        # of truth (as used for the optimizer) is `_cpu_grad`
+        unsharded_grad = (
+            self.flat_param.grad
+            if self.uses_sharded_strategy or not self._offload_params
+            else self.flat_param._cpu_grad  # type: ignore[attr-defined]
+        )
+        self._check_unsharded(unsharded_grad)
+        views = self._get_unflat_views(self.flat_param, unsharded_grad)
         for i, (view, (param_name, module, _)) in enumerate(
             zip(views, self.flat_param._param_infos)
         ):
@@ -1488,11 +1495,16 @@ class FlatParamHandle:
                 f"{self.flat_param._fqns[i]} is missing",
             )
             param = getattr(module, param_name)
-            if param.shape != view.shape:
+            if param.shape != view.shape or (
+                param.dtype != view.dtype and not self.uses_sharded_strategy
+            ):
                 # NOTE: This is a hack using `.data` to side step the
-                # check that parameter/gradient sizes match. Here,
-                # `param` has the sharded size; `grad` has the unsharded size.
-                # This happens when running in `no_sync()`.
+                # check that parameter/gradient sizes and dtypes match. Here,
+                # `param` can have the sharded size, and `grad` can have the
+                # unsharded size. Orthgonally, `param` can have the full
+                # precision dtype from `reshard()`, and `grad` can have the
+                # parameter low precision dtype. Both of these mismatches
+                # happen when running in `no_sync()`.
                 if param.grad is None:
                     param.grad = torch.empty_like(param)
                 param.grad.data = view
@@ -1512,7 +1524,10 @@ class FlatParamHandle:
             )  # did not save FQN info in `_shared_param_infos`
             param = getattr(module, param_name)
             prim_param = getattr(prim_module, prim_param_name)
-            if param.shape != prim_param.grad.shape:
+            if (
+                param.shape != prim_param.grad.shape
+                or param.dtype != prim_param.grad.dtype
+            ):
                 # NOTE: This is the same hack to use `.data` to side step the
                 # size check.
                 if param.grad is None:
@@ -1608,6 +1623,11 @@ class FlatParamHandle:
         this method does not manipulate existing ``Tensor`` data directly and
         creates new ``Tensor`` variables instead.
         """
+        if not self.uses_sharded_strategy:
+            # For `NO_SHARD`, use the *unflattened* unsharded views since we
+            # have the unsharded gradient
+            self._use_unsharded_grad_views()
+            return
         flat_param = self.flat_param
         self._check_sharded(flat_param)
         grad = self.sharded_grad
