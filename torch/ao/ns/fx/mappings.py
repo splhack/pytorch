@@ -373,6 +373,7 @@ def get_base_name_to_sets_of_related_ops() -> Dict[str, Set[NSNodeTargetType]]:
 
     for source_to_double_target in (
         _lower_to_native_backend.STATIC_LOWER_FUSED_MODULE_MAP,
+        _lower_to_native_backend.STATIC_LOWER_FUSED_MODULE_TWO_DQ_NODES_MAP,
         _lower_to_native_backend.DYNAMIC_LOWER_FUSED_MODULE_MAP,
     ):
         for source, (target1, target2) in source_to_double_target.items():  # type: ignore[attr-defined]
@@ -602,6 +603,7 @@ def get_node_type_to_io_type_map() -> Dict[str, Set[NSNodeTargetType]]:
         nniqat.LinearBn1d,
         nniqd.LinearReLU,
         nni.LinearLeakyReLU,
+        nni.ConvAdd2d,
     ])
 
     MODS_IO_TYPE_INT8: Set[NSNodeTargetType] = set([
@@ -633,6 +635,7 @@ def get_node_type_to_io_type_map() -> Dict[str, Set[NSNodeTargetType]]:
         nniq.ConvReLU3d,
         nniq.LinearReLU,
         nniq.LinearLeakyReLU,
+        nniq.ConvAdd2d,
     ])
 
     MODS_IO_TYPE_FP32_OR_INT8: Set[NSNodeTargetType] = set([
